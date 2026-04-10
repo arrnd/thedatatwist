@@ -26,6 +26,24 @@
         </div>
     </div>
 
+    <!-- BLE connection panel for 2x Circuit Playground Bluefruit (Compass game) -->
+    <div id="ble-panel" class="container-fluid text-center my-2">
+        <div class="row justify-content-center">
+            <div class="col-auto">
+                <button id="connect-p1" class="btn btn-outline-dark" type="button">Connect Participant 1</button>
+                <span id="status-p1" class="ms-2 text-muted">–</span>
+            </div>
+            <div class="col-auto">
+                <button id="connect-p2" class="btn btn-outline-dark" type="button">Connect Participant 2</button>
+                <span id="status-p2" class="ms-2 text-muted">–</span>
+            </div>
+        </div>
+        <div class="row justify-content-center mt-2">
+            <div class="col" id="response-p1"></div>
+            <div class="col" id="response-p2"></div>
+        </div>
+    </div>
+
     <div class="container-fluid text-center flex-grow-1">
         <div class="row">
             <div class="d-grid gap-2">
@@ -53,6 +71,11 @@
             </div>
             <div class="col">
                 <h1 id="statement" class="game card"></h1>
+            </div>
+        </div>
+        <div class="row justify-content-center mt-3">
+            <div class="col-auto">
+                <span id="countdown" style="font-size: 5rem; line-height: 1;"></span>
             </div>
         </div>
     </div>
@@ -161,7 +184,7 @@
         function setupArrays() {
             /* Important indexes match between setsOfParts, orientations, instructions, and orientation images and their alt texts.*/
 
-            let partsCompass = ["right hand", "left hand", "right elbow", "left elbow", "right knee", "left knee", "head"]; // could add feet for more advance movers
+            let partsCompass = ["wrist"]; // v1: wrist-only for CPB arm-throw gesture
             let partsInterchange = ["right hand", "left hand", "right foot", "left foot", "right elbow", "left elbow", "ribs", "nose"];
             let partsTwister = ["right hand", "left hand", "right foot", "left foot"]; // Hands and feet
             let partsSensory = ["right palm", "left palm", "right back of hand", "left back of hand", "right forearm", "left forearm"];
