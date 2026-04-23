@@ -11,6 +11,71 @@
 
     <!-- Load style sheet I edit -->
     <link rel="stylesheet" href="css/style.css">
+
+    <style>
+        /* ── BLE participant cards ───────────────── */
+        .ble-card {
+            width: 56px;
+            height: 56px;
+            border-radius: 8px;
+            border: 2px solid #adb5bd;
+            background: #fff;
+            color: #6c757d;
+            font-size: 0.95rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s, color 0.2s;
+        }
+        .ble-card:hover { border-color: #495057; color: #212529; }
+        .ble-card.connecting { border-color: #ffc107; color: #ffc107; }
+        .ble-card.connected  { background: #22c55e; border-color: #22c55e; color: #fff; }
+
+        /* ── Full-screen color flash ─────────────── */
+        #viz-flash {
+            position: fixed;
+            inset: 0;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 900;
+            transition: opacity 0.25s ease-in;
+        }
+        #viz-flash.viz-flash--on {
+            opacity: 1;
+            transition: opacity 0.25s ease-in, opacity 0.4s 0.25s ease-out;
+        }
+
+        /* ── Visualization overlay ───────────────── */
+        #viz-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(255,255,255,0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 800;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.5s ease;
+            cursor: pointer;
+        }
+        #viz-overlay.viz-overlay--active {
+            opacity: 1;
+            pointer-events: all;
+        }
+        #viz-chart {
+            width: 92vw;
+            max-width: 1400px;
+        }
+        
+        /* ── Constrain orientation images ──────────── */
+        [id="orientation img"] {
+            max-width: 400px;
+            max-height: 500px;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+        }
+    </style>
 </head>
 <body>
 
@@ -26,21 +91,17 @@
         </div>
     </div>
 
-    <!-- BLE connection panel for 2x Circuit Playground Bluefruit (Compass game) -->
+    <!-- BLE connection panel for up to 8x Circuit Playground Bluefruit (Compass game) -->
     <div id="ble-panel" class="container-fluid text-center my-2">
-        <div class="row justify-content-center">
-            <div class="col-auto">
-                <button id="connect-p1" class="btn btn-outline-dark" type="button">Connect Participant 1</button>
-                <span id="status-p1" class="ms-2 text-muted">–</span>
-            </div>
-            <div class="col-auto">
-                <button id="connect-p2" class="btn btn-outline-dark" type="button">Connect Participant 2</button>
-                <span id="status-p2" class="ms-2 text-muted">–</span>
-            </div>
-        </div>
-        <div class="row justify-content-center mt-2">
-            <div class="col" id="response-p1"></div>
-            <div class="col" id="response-p2"></div>
+        <div class="d-flex justify-content-center gap-2 flex-wrap">
+            <button id="connect-p1" class="ble-card" type="button">P1</button>
+            <button id="connect-p2" class="ble-card" type="button">P2</button>
+            <button id="connect-p3" class="ble-card" type="button">P3</button>
+            <button id="connect-p4" class="ble-card" type="button">P4</button>
+            <button id="connect-p5" class="ble-card" type="button">P5</button>
+            <button id="connect-p6" class="ble-card" type="button">P6</button>
+            <button id="connect-p7" class="ble-card" type="button">P7</button>
+            <button id="connect-p8" class="ble-card" type="button">P8</button>
         </div>
     </div>
 
@@ -49,10 +110,10 @@
             <div class="d-grid gap-2">
                 <button id="orient button" class="btn btn-dark btn-lg" type="button">game</button>
             </div>
-            <div class="col-3">
+            <div class="col-4">
                 <img id="orientation img">
             </div>
-            <div class="col-5">
+            <div class="col-4">
                 <p id="orientation"></p>
             </div>
             <div class="col-4">
@@ -86,6 +147,14 @@
         </div>
     </div>
 
+    <!-- Color flash layer (sits above everything during transition) -->
+    <div id="viz-flash"></div>
+
+    <!-- Visualization overlay (appears after flash fades) -->
+    <div id="viz-overlay">
+        <div id="viz-chart"></div>
+    </div>
+
     <!-- Load JS libraries -->
     <script src="js/d3.v7.js"></script>
     <script src="js/bootstrap.bundle.js"></script>
@@ -99,14 +168,15 @@
         /* data stores the Google Forms csv file(s) post cleaning in setupFormData() */
         var data = [];
 
-        /* Stores all statements as strings */
+        /* Stores all statements as strings - SESSION-LEVEL to prevent reset across games */
         var statements = [];
+        /* Track statements picked across entire session to prevent repetition */
+        var pickedStatements = [];
 
         /* Stores the current set of body parts according to which orientation is being played.*/
         var parts = [];
 
-        /* For storing which statements and parts have already been randomly selected by picker(choice) function*/
-        var pickedStatements = [];
+        /* For storing which parts have already been randomly selected (resets per game) */
         var pickedParts = [];
         /* 'counter' used for cycling through the below arrays in function printGameCards() */
         var counter = 1;
@@ -121,56 +191,87 @@
 
         setupFormData();
 
-        /* This asynchronous function retrieves data from the Google Form at program launch for populating 'data'.
+        /* This asynchronous function retrieves data from Google Sheets at program launch.
+        Loads games from CI Games sheet and statements from Data Twist statements sheet.
         Other primary functions are called from here to run program. */
         async function setupFormData() {
-            let sheet;
+            let gamesSheet, statementsSheet;
             try {
-                sheet = await d3.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vS3ulE1gDvnv0Y9NC9Z-Lgck85W9aZpRZpYjw1FbUah1dVy3nTUcQzOGwNRDxXAQwQ3VWf-giRFaGoF/pub?gid=1476223550&single=true&output=csv");
+                // Load games from CI Games sheet
+                gamesSheet = await d3.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vRnJlmWn0MRDb6Y_RDqIOMoWdNVzMUEee0bBXZGgC81hMdIW7pJqoaOV3xNScpUPDgKQVikPq2QgwSH/pub?gid=0&single=true&output=csv");
+                // Load statements from Data Twist statements sheet
+                statementsSheet = await d3.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vSxH77DQSRxY-FZ3usmxD4lBTc6dfPNRk7cehZT6Nu1NUsa4fuhnkkdvmcFHc8lDCspekEMxGMIVryU/pub?gid=1476223550&single=true&output=csv");
             } catch (error) {
-                console.log("error loading csv from url", error);
+                console.log("error loading sheets from urls", error);
             }
 
-            /* Clean and populate 'data' as an array of objects */
-            sheet.forEach(function (d) {
+            // Populate statements from the Data Twist statements sheet
+            statementsSheet.forEach(function (row) {
+                // Extract all statement columns (strongly agree, somewhat agree, somewhat disagree, strongly disagree)
+                const stronglyAgree = row["Write a PERSONAL statement you STRONGLY AGREE with. For example, my mother accepts me for who I am."];
+                const somewhatAgree = row["Write a CASUAL statement you SOMEWHAT AGREE with. For example, Training wheels do not train balance so are best skipped when learning to ride a bike."];
+                const somewhatDisagree = row["Write a PLAYFUL statement you SOMEWHAT DISAGREE with. For example, stinkier cheese has more flavor than milder smelling cheese."];
+                const stronglyDisagree = row["Write a THORNY statement you STRONGLY DISAGREE with. For example, Art funding is unnecessary with the influx of NFTs. No inflammatory statements please."];
 
-                let obj = {}; // Create new object for adding to 'data'
-
-                /* Copying d (original object created when initializing 'sheet') into 'obj' since key names are unwieldy */
-                obj["time"] = d["Timestamp"];
-                obj["stronglyagree"] = d["Write a PERSONAL statement you STRONGLY AGREE with. For example, my mother accepts me for who I am."];
-                obj["stronglydisagree"] = d["Write a THORNY statement you STRONGLY DISAGREE with. For example, Art funding is unnecessary with the influx of NFTs. No inflammatory statements please."];
-                obj["somewhatagree"] = d["Write a CASUAL statement you SOMEWHAT AGREE with. For example, Training wheels do not train balance so are best skipped when learning to ride a bike."];
-                obj["somewhatdisagree"] = d["Write a PLAYFUL statement you SOMEWHAT DISAGREE with. For example, stinkier cheese has more flavor than milder smelling cheese."];
-
-                /* Change key value to "incomplete" if field was left blank or contains a question (only want statements) */
-                if (obj.stronglyagree === "" || obj.stronglyagree.includes('?')) {
-                    obj.stronglyagree = "incomplete";
+                // Add statements if they are not empty and don't contain questions
+                if (stronglyAgree && stronglyAgree.trim() !== "" && !stronglyAgree.includes('?')) {
+                    statements.push(stronglyAgree);
                 }
-                if (obj.stronglydisagree === "" || obj.stronglydisagree.includes('?')) {
-                    obj.stronglydisagree = "incomplete";
+                if (somewhatAgree && somewhatAgree.trim() !== "" && !somewhatAgree.includes('?')) {
+                    statements.push(somewhatAgree);
                 }
-                if (obj.somewhatagree === "" || obj.somewhatagree.includes('?')) {
-                    obj.somewhatagree = "incomplete";
+                if (somewhatDisagree && somewhatDisagree.trim() !== "" && !somewhatDisagree.includes('?')) {
+                    statements.push(somewhatDisagree);
                 }
-                if (obj.somewhatdisagree === "" || obj.somewhatdisagree.includes('?')) {
-                    obj.somewhatdisagree = "incomplete";
+                if (stronglyDisagree && stronglyDisagree.trim() !== "" && !stronglyDisagree.includes('?')) {
+                    statements.push(stronglyDisagree);
                 }
-
-                /* Subdividing the original timestamp into two key:values. Leaving as strings for now. */
-                let time = obj.time; // currently looks like "2/27/2025 8:50:32"
-                let date = time.substring(0, time.indexOf(' ')); //truncating to "2/27/2025"
-                let identifier = time.substring(time.indexOf(' ') + 1); //truncating to "8:50:32"
-
-                obj["time"] = time;
-                obj["identifier"] = identifier;
-
-                data.push(obj);
             });
 
-            /* Populate 'statements' */
-            data.forEach(function (d) {
-                statements.push(d.stronglyagree, d.somewhatagree, d.somewhatdisagree, d.stronglydisagree);
+            // Define body parts for games that use them
+            const bodyPartsMap = {
+                "Twister Reimagined": ["right hand", "left hand", "right foot", "left foot"],
+                "Urban Interchange": ["right hand", "left hand", "right foot", "left foot", "right elbow", "left elbow", "ribs", "nose"]
+            };
+
+            // Map game names to local image files
+            const gameImageMap = {
+                "Compass": "img/Compass.jpg",
+                "Twister Reimagined": "img/TwisterReimagined.png",
+                "Urban Interchange": "img/UrbanInterchanges.png",
+                "School Day": "img/SchoolDay.png",
+                "Head, Shoulders, Knees, & Toes": "img/HeadShouldersKneesToes.png",
+                "States of Matter": "img/StatesOfMatterTemp.png"
+            };
+
+            // Process games from CI Games sheet
+            gamesSheet.forEach(function (gameRow) {
+                const gameName = gameRow.game;
+                const orientation = gameRow.orientation;
+                const rules = gameRow.rules;
+                const visualKeyUrl = gameImageMap[gameName] || "img/qr.png";
+                const bodyPartFlag = gameRow["body part"];
+
+                // Determine if this game uses body parts (on/off flag)
+                let bodyParts = [];
+                if (bodyPartFlag === "on" && bodyPartsMap[gameName]) {
+                    bodyParts = bodyPartsMap[gameName];
+                }
+
+                // Create game orientation description
+                let orientationDesc = `<h2>${gameName.toUpperCase()}</h2><br />${orientation}`;
+
+                // Create choreography instructions based on rules
+                let choreographyInstructions = `<h2>CHOREOGRAPHY</h2><br />${rules}`;
+
+                // Add game data to arrays
+                if (gameName) {
+                    setsOfParts.push(bodyParts);
+                    orientations.push(orientationDesc);
+                    orientationImages.push(visualKeyUrl);
+                    orientationImagesAlt.push(gameName);
+                    instructions.push(choreographyInstructions);
+                }
             });
 
             /* calling other functions from within this async function ensures all data is loaded first */
@@ -180,41 +281,15 @@
             // captionsOn();
         }
 
-        /*Populates 'setsOfParts', 'orientations', 'orientationImages', 'orientationImagesAlt', 'instructions' */
+        /*Populates 'setsOfParts', 'orientations', 'orientationImages', 'orientationImagesAlt', 'instructions' 
+        NOTE: These arrays are now populated dynamically from Google Sheets in setupFormData(), 
+        so this function now just initializes the first game display */
         function setupArrays() {
-            /* Important indexes match between setsOfParts, orientations, instructions, and orientation images and their alt texts.*/
-
-            let partsCompass = ["wrist"]; // v1: wrist-only for CPB arm-throw gesture
-            let partsInterchange = ["right hand", "left hand", "right foot", "left foot", "right elbow", "left elbow", "ribs", "nose"];
-            let partsTwister = ["right hand", "left hand", "right foot", "left foot"]; // Hands and feet
-            let partsSensory = ["right palm", "left palm", "right back of hand", "left back of hand", "right forearm", "left forearm"];
-
-            let orientationCompass = "<h2>COMPASS</h2><br />Using your body's center as the origin: <br /> The space above or north of you signifies <em>strongly agree</em>, the space below or south of you signifies <em>strongly disagree</em>, the space to your right or east signifies <em>somewhat agree</em>, and the space to your left or west signifies <em>somewhat disagree</em>.";
-            let orientationInterchange ="<h2>INTERCHANGE</h2><br />Using an urban traffic interchange as a map: Moving forward signifies <em>strongly agree</em>, turning right signifies <em>somewhat agree</em>, turning left signifies <em>somewhat disagree</em>, and moving backwards or making a U-turn signifies <em>strongly disagree</em>.";
-            let orientationTwister = "<h2>TWISTER</h2><br />Using the original Twister board as a map: The green circles signify <em>strongly agree</em>, the yellow circles signify <em>somewhat agree</em>, the blue circles signify <em>somewhat disagree</em>, and the red circles signify <em>strongly disagree</em>.";
-            let orientationSensory = "<h2>SENSORY BOARD</h2><br />Using the Sensory Board as a map: The green turf signifies <em>strongly agree</em>, the pink yarn signifies <em>somewhat agree</em>, the grey shag signifies <em>somewhat disagree</em>, and the orange felt signifies <em>strongly disagree</em>.";
-            /*Can add text somewhere: "(left-handed players may want to flip the EAST/WEST signifiers to be more intuitive.)" and "(left-handed players may want to flip the RIGHT/LEFT signifiers to be more intuitive.)" */
-
-            let imgCompass = "img/BodyCompassFilippaEdghill.jpg";
-            let imgInterchange = "img/UrbanInterchanges.png";
-            let imgTwister = "img/TwisterBoard.jpg";
-            let imgSensory = "img/SensoryBoard.jpeg";
-
-            let altCompass = "A compass showing a knot of limbs where left hand points north, right foot points east, left foot points south, and right knee points west. Illustration by Filippa Edghill.";
-            let altInterchange = "Hand drawn diagram of typical 4-leg interchange designs for car traffic.";
-            let altTwister = "An aerial shot of a classic Twister board.";
-            let altSensory = "An aerial shot of a baby sensory play mat. There are four columns. Going left to right, the farthest left column is made from green turf carpet, then pink yarn carpet, then grey shag carpet, then orange felt carpet. The four columns are encased by a blue row up top and a white row at bottom.";
-
-            let instructionsCompass = "<h2>CHOREOGRAPHY</h2><br />Listen to the new body part and statement. Move that part via improvisation while contemplating the statement in motion. Pronounce your level of agreement through moving that part north, south, east, or west to find a sustainable pose. Find stillness while waiting for the next body part and statement.";
-            let instructionsInterchange = "<h2>CHOREOGRAPHY</h2><br />Continuously navigate across the center of the room being mindful of others. Listen for the new body part and statement while walking, contemplating the statement in motion. When clear about your level of agreement, carve a path forward, right, left, or backward, leading with the body part to find a sustainable pose. Find stillness. Once you feel the entire room is still, begin walking again.";
-            let instructionsTwister = "<h2>CHOREOGRAPHY</h2><br />Listen for the new body part and statement. Move that part to the color dot signifying your level of agreement.";
-            let instructionsSensory = "<h2>CHOREOGRAPHY</h2><br />Listen for the new body part and statement. Move that part to the textured column signifying your level of agreement.";
-
-            setsOfParts = [partsCompass, partsInterchange, partsTwister, partsSensory];
-            orientations = [orientationCompass, orientationInterchange, orientationTwister, orientationSensory];
-            orientationImages = [imgCompass, imgInterchange, imgTwister, imgSensory];
-            orientationImagesAlt = [altCompass, altInterchange, altTwister, altSensory];
-            instructions = [instructionsCompass, instructionsInterchange, instructionsTwister, instructionsSensory];
+            // Arrays are now dynamically populated from Google Sheets in setupFormData()
+            // Initialize first game
+            if (setsOfParts.length > 0) {
+                parts = setsOfParts[0];
+            }
         }
 
         function printGameCards() {
@@ -226,16 +301,20 @@
             document.getElementById("instruction").innerHTML = instructions[0];
 
             parts = setsOfParts[0];
-            document.getElementById("body part").innerHTML = picker("part");
+            updateBodyPartDisplay();
             document.getElementById("statement").innerHTML = picker("statement");
 
 
             // When button 2 is pressed, update body part and statement game cards
             document.getElementById("spin button").addEventListener("click", function (event) {
-                let part = picker("part");
                 let statement = picker("statement");
-
-                speakText(part);
+                let part = "";
+                
+                if (parts.length > 0) {
+                    part = picker("part");
+                    speakText(part);
+                }
+                
                 speakText(statement);
                 document.getElementById("body part").innerHTML = part;
                 document.getElementById("statement").innerHTML = statement;
@@ -253,7 +332,7 @@
 
                     pickedParts = [];
                     parts = setsOfParts[counter];
-                    document.getElementById("body part").innerHTML = picker("part");
+                    updateBodyPartDisplay();
                     document.getElementById("statement").innerHTML = picker("statement");
 
                     counter++;
@@ -264,6 +343,18 @@
             });
 
             // For debugging, use 'tab' to select a button then 'return' to press it.
+        }
+
+        /* Helper function to show/hide body part display based on current game */
+        function updateBodyPartDisplay() {
+            const bodyPartEl = document.getElementById("body part");
+            if (parts.length > 0) {
+                bodyPartEl.style.display = "";
+                bodyPartEl.innerHTML = picker("part");
+            } else {
+                bodyPartEl.style.display = "none";
+                bodyPartEl.innerHTML = "";
+            }
         }
 
         /* See Web Speech API documentation on MDM Web Docs by Mozilla. 'speakText' reads aloud the body part and statement */
@@ -372,6 +463,11 @@
         // Example usage:
     </script>
 
+    <!-- Brush stroke library — ESM build exposed to window for main.js -->
+    <script type="module">
+      import { getStroke } from './js/perfect-freehand.module.js';
+      window.getStroke = getStroke;
+    </script>
     <!-- Load my scripts -->
     <script src="js/main.js"></script>
 </body>

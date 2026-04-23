@@ -10,10 +10,10 @@
 #
 # Flow:
 #   IDLE    — board does nothing, LEDs off (participants walk freely)
-#   READING — browser sent "GO", 5s response window
-#             LEDs pulse white, detect direction live, beep+color on each change
-#   LOCKED  — window closed, board automatically sends last detected direction
-#             (or "-" for no answer), holds that color for 1.5s, returns to IDLE
+#   ARMED   — browser sent "ARM" (spin clicked), LEDs pulse white, no sound/detection
+#   READING — browser sent "GO" (5s before end), direction detection + sound enabled
+#   LOCKED  — window closed, board sends last detected direction
+#             (or "-" for no answer), holds that color until next ARM
 
 import time
 import board
@@ -26,9 +26,12 @@ from adafruit_ble.services.nordic import UARTService
 # Configuration
 # ---------------------------------------------------------------------------
 
-THRESHOLD      = 6.0   # m/s² — minimum acceleration to register a direction
+THRESHOLD         = 6.0  # m/s² — minimum acceleration to register a direction
 RESPONSE_WINDOW_S = 5.0  # seconds participants have to lock in after GO
-LOCK_HOLD_S    = 1.5   # seconds to hold locked color before returning to IDLE
+STREAM_INTERVAL_S = 0.05  # how often to stream current direction to browser (matches loop rate)
+
+# Streaming chars (lowercase/special to distinguish from final answer N/S/E/W/-)
+STREAM_CHARS = {"N": "a", "S": "b", "E": "c", "W": "d", None: "_"}
 
 # Color table: direction → (R, G, B)
 COLORS = {
@@ -94,14 +97,17 @@ def read_uart_line():
 # Main loop
 # ---------------------------------------------------------------------------
 
-IDLE     = "idle"
-READING  = "reading"
+IDLE    = "idle"
+ARMED   = "armed"
+READING = "reading"
+LOCKED  = "locked"
 
 state          = IDLE
 window_start   = 0.0
 current_dir    = None   # direction currently being shown during READING
 pulse_bright   = True
 pulse_tick     = 0.0
+stream_tick    = 0.0
 
 pixels_off()
 print("DataTwist CPB ready — advertising BLE…")
@@ -121,7 +127,16 @@ while True:
 
     # ---- Read incoming BLE command ----
     cmd = read_uart_line()
-    if cmd == "GO" and state == IDLE:
+    if cmd == "ARM" and state in (IDLE, LOCKED):
+        pixels_off()
+        state        = ARMED
+        current_dir  = None
+        pulse_bright = True
+        pulse_tick   = now
+        stream_tick  = now
+        print("ARM received — lights on, waiting for GO")
+
+    elif cmd == "GO" and state == ARMED:
         state        = READING
         window_start = now
         current_dir  = None
@@ -132,6 +147,33 @@ while True:
     # ---- State machine ----
     if state == IDLE:
         pixels_off()
+
+    elif state == LOCKED:
+        pass  # hold last color until ARM resets
+
+    elif state == ARMED:
+        # Direction detection active so participants can position themselves,
+        # but no sound — that only starts once GO is received
+        ax, ay, az = cp.acceleration
+        direction = detect_direction(ax, ay, az)
+
+        if direction != current_dir:
+            current_dir = direction
+            if direction:
+                pixels_set(COLORS[direction])
+            else:
+                pixels_set(WHITE if pulse_bright else WHITE_DIM)
+
+        # White pulse when flat/no direction
+        if not direction and (now - pulse_tick) >= 0.5:
+            pulse_bright = not pulse_bright
+            pixels_set(WHITE if pulse_bright else WHITE_DIM)
+            pulse_tick = now
+
+        # Stream current direction to browser every 500ms
+        if (now - stream_tick) >= STREAM_INTERVAL_S:
+            uart.write(STREAM_CHARS.get(current_dir, "_").encode("utf-8"))
+            stream_tick = now
 
     elif state == READING:
         elapsed = now - window_start
@@ -147,6 +189,11 @@ while True:
             else:
                 pixels_set(WHITE if pulse_bright else WHITE_DIM)
 
+        # Stream current direction to browser every 500ms
+        if (now - stream_tick) >= STREAM_INTERVAL_S:
+            uart.write(STREAM_CHARS.get(current_dir, "_").encode("utf-8"))
+            stream_tick = now
+
         # Beep on BEEP command from browser (browser drives timing)
         if cmd == "BEEP" and current_dir:
             cp.play_tone(TONES[current_dir][0], TONES[current_dir][1])
@@ -157,7 +204,7 @@ while True:
             pixels_set(WHITE if pulse_bright else WHITE_DIM)
             pulse_tick = now
 
-        # Window expired — lock in answer
+        # Window expired — lock in answer, hold color until next ARM
         if elapsed >= RESPONSE_WINDOW_S:
             answer = current_dir  # None = no answer
             if answer:
@@ -170,10 +217,6 @@ while True:
                 uart.write(b"-\n")   # signal no answer
                 print("Locked: no answer")
 
-            # Hold final color briefly then go idle
-            time.sleep(LOCK_HOLD_S)
-            pixels_off()
-            state = IDLE
-            current_dir = None
+            state = LOCKED  # hold color until coordinator hits spin again
 
     time.sleep(0.05)  # ~20 Hz
