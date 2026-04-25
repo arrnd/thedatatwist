@@ -17,7 +17,6 @@ p {
 }
 img {
     height: 575px;
-    /*margin: 10px;*/
     padding: 20px;
 }
 #qr {
@@ -26,4 +25,135 @@ img {
 .btn {
     font-size: 1.875rem;
     letter-spacing: 1px;
+}
+
+/* ── Slideshow system ──────────────────────────── */
+html, body {
+    height: 100%;
+    overflow: hidden;
+    margin: 0;
+}
+
+.slide-container {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+}
+
+.slide {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2.5rem 3rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+    overflow: hidden;
+}
+
+.slide.active {
+    opacity: 1;
+    pointer-events: all;
+}
+
+/* ── Per-slide navigation buttons ──────────────── */
+.slide-btn-next,
+.slide-btn-prev {
+    position: absolute;
+    bottom: 1.75rem;
+    font-size: 2.5rem;
+    line-height: 1;
+    padding: 0.2rem 0.85rem 0.35rem;
+}
+
+.slide-btn-next {
+    right: 1.75rem;
+}
+
+.slide-btn-prev {
+    left: 1.75rem;
+}
+
+/* ── Slide 2: game page grid ────────────────────── */
+.game-page-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: auto auto auto;
+    align-content: space-between;
+    gap: 1.5rem 2rem;
+    width: 100%;
+    max-width: 1200px;
+    height: 90%;
+}
+
+.game-pg-header,
+.game-pg-footer {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 1rem;
+}
+
+.game-pg-footer {
+    flex-direction: row;
+}
+
+.game-pg-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+/* Override global img height inside slides */
+.slide img:not(#qr) {
+    height: auto;
+    max-height: 52vh;
+    max-width: 100%;
+    object-fit: contain;
+    padding: 0;
+}
+
+.slide p {
+    margin: 0;
+    padding: 0.5rem 0;
+}
+
+/* ── Slide 4: spin layout ───────────────────────── */
+.spin-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+    width: 100%;
+    max-width: 1200px;
+    align-items: center;
+}
+
+.spin-col-image {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.spin-col-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+/* ── Slide 3: response grid ─────────────────────── */
+.responses-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.5rem;
+    width: 100%;
+    max-width: 1200px;
 }

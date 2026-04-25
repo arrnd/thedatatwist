@@ -18,6 +18,7 @@
 import time
 import board
 from adafruit_circuitplayground import cp
+import _bleio
 from adafruit_ble import BLERadio
 from adafruit_ble.advertising.standard import ProvideServicesAdvertisement
 from adafruit_ble.services.nordic import UARTService
@@ -57,7 +58,8 @@ WHITE_DIM  = (20, 20, 20)
 # ---------------------------------------------------------------------------
 
 ble = BLERadio()
-ble.name = "DataTwist"   # change to "DataTwist2" on the second CPB
+_bleio.adapter.address = _bleio.Address(b'\x01\x00\x00\x00\x00\xC0', _bleio.Address.RANDOM_STATIC)  # overwritten per board
+ble.name = "DataTwist"   # overwritten per board by flash script
 uart = UARTService()
 advertisement = ProvideServicesAdvertisement(uart)
 

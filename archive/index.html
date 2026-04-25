@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="description" content="">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>The Data Twist!</title>
+
+    <!-- Load CSS Bootstrap file -->
+    <link rel="stylesheet" href="css/bootstrap.css">
+
+    <!-- Load style sheet I edit -->
+    <link rel="stylesheet" href="css/style.css">
+
+    <style>
+        /* ── BLE participant cards ───────────────── */
+        .ble-card {
+            width: 56px;
+            height: 56px;
+            border-radius: 8px;
+            border: 2px solid #adb5bd;
+            background: #fff;
+            color: #6c757d;
+            font-size: 0.95rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s, color 0.2s;
+        }
+        .ble-card:hover { border-color: #495057; color: #212529; }
+        .ble-card.connecting { border-color: #ffc107; color: #ffc107; }
+        .ble-card.connected  { background: #22c55e; border-color: #22c55e; color: #fff; }
+
+        /* ── Full-screen color flash ─────────────── */
+        #viz-flash {
+            position: fixed;
+            inset: 0;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 900;
+            transition: opacity 0.25s ease-in;
+        }
+        #viz-flash.viz-flash--on {
+            opacity: 1;
+            transition: opacity 0.25s ease-in, opacity 0.4s 0.25s ease-out;
+        }
+
+        /* ── Visualization overlay ───────────────── */
+        #viz-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(255,255,255,0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 800;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.5s ease;
+            cursor: pointer;
+        }
+        #viz-overlay.viz-overlay--active {
+            opacity: 1;
+            pointer-events: all;
+        }
+        #viz-chart {
+            width: 92vw;
+            max-width: 1400px;
+        }
+        
+        /* ── Constrain orientation images ──────────── */
+        [id="orientation img"] {
+            max-width: 400px;
+            max-height: 500px;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container-fluid flex-grow-1">
+        <div class="row">
+            <div class="col-8">
+                <h1>Twisting Data</h1>
+            </div>
+            <div class="col">
+                <img id="qr" src="img/qr.png" alt="QR code">
+                <a href="https://docs.google.com/forms/d/1UuEuy9_HjgBh6elHKBsRaKl8hwaObxe8I7uR6mtMYJM/edit">Add new statements to survey</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- BLE connection panel for up to 8x Circuit Playground Bluefruit (Compass game) -->
+    <div id="ble-panel" class="container-fluid text-center my-2">
+        <div class="d-flex justify-content-center gap-2 flex-wrap">
+            <button id="connect-p1" class="ble-card" type="button">P1</button>
+            <button id="connect-p2" class="ble-card" type="button">P2</button>
+            <button id="connect-p3" class="ble-card" type="button">P3</button>
+            <button id="connect-p4" class="ble-card" type="button">P4</button>
+            <button id="connect-p5" class="ble-card" type="button">P5</button>
+            <button id="connect-p6" class="ble-card" type="button">P6</button>
+            <button id="connect-p7" class="ble-card" type="button">P7</button>
+            <button id="connect-p8" class="ble-card" type="button">P8</button>
+        </div>
+    </div>
+
+    <div class="container-fluid text-center flex-grow-1">
+        <div class="row">
+            <div class="d-grid gap-2">
+                <button id="orient button" class="btn btn-dark btn-lg" type="button">game</button>
+            </div>
+            <div class="col-4">
+                <img id="orientation img">
+            </div>
+            <div class="col-4">
+                <p id="orientation"></p>
+            </div>
+            <div class="col-4">
+                <p id="instruction"></p>
+            </div>
+        </div>
+    </div>
+
+    <div class="container-fluid text-center flex-grow-1">
+        <div class="row">
+            <div class="d-grid gap-2">
+                <button id="spin button" class="btn btn-dark btn-lg" type="button">spin</button>
+            </div>
+            <div class="col">
+                <h1 id="body part" class="game card"></h1>
+            </div>
+            <div class="col">
+                <h1 id="statement" class="game card"></h1>
+            </div>
+        </div>
+        <div class="row justify-content-center mt-3">
+            <div class="col-auto">
+                <span id="countdown" style="font-size: 5rem; line-height: 1;"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container-fluid text-center flex-grow-1">
+        <div class="row">
+            <p id="captions"></p>
+        </div>
+    </div>
+
+    <!-- Color flash layer (sits above everything during transition) -->
+    <div id="viz-flash"></div>
+
+    <!-- Visualization overlay (appears after flash fades) -->
+    <div id="viz-overlay">
+        <div id="viz-chart"></div>
+    </div>
+
+    <!-- Load JS libraries -->
+    <script src="js/d3.v7.js"></script>
+    <script src="js/bootstrap.bundle.js"></script>
+
+    <!-- This script loads, cleans, and structures the Google Form responses. Functions for playing Twister Reimagined are
+    also called from here. The csv file is generated through Google Forms and published as a URL in Google Sheets. -->
+    <script>
+        /* A hello world for making sure d3 is loading correctly */
+        // d3.select("body").append("p").text("Hello World!");
+
+        /* data stores the Google Forms csv file(s) post cleaning in setupFormData() */
+        var data = [];
+
+        /* Stores all statements as strings - SESSION-LEVEL to prevent reset across games */
+        var statements = [];
+        /* Track statements picked across entire session to prevent repetition */
+        var pickedStatements = [];
+
+        /* Stores the current set of body parts according to which orientation is being played.*/
+        var parts = [];
+
+        /* For storing which parts have already been randomly selected (resets per game) */
+        var pickedParts = [];
+        /* 'counter' used for cycling through the below arrays in function printGameCards() */
+        var counter = 1;
+
+        // The below arrays are populated in function setupArrays() where their indices are coordinated.
+        var setsOfParts = [];
+        var orientations = [];
+        var orientationImages = [];
+        // TO-DO Add a tooltip hover event for seeing alt text, plus a click event for enlarging images
+        var orientationImagesAlt = [];
+        var instructions = [];
+
+        setupFormData();
+
+        /* This asynchronous function retrieves data from Google Sheets at program launch.
+        Loads games from CI Games sheet and statements from Data Twist statements sheet.
+        Other primary functions are called from here to run program. */
+        async function setupFormData() {
+            let gamesSheet, statementsSheet;
+            try {
+                // Load games from CI Games sheet
+                gamesSheet = await d3.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vRnJlmWn0MRDb6Y_RDqIOMoWdNVzMUEee0bBXZGgC81hMdIW7pJqoaOV3xNScpUPDgKQVikPq2QgwSH/pub?gid=0&single=true&output=csv");
+                // Load statements from Data Twist statements sheet
+                statementsSheet = await d3.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vSxH77DQSRxY-FZ3usmxD4lBTc6dfPNRk7cehZT6Nu1NUsa4fuhnkkdvmcFHc8lDCspekEMxGMIVryU/pub?gid=1476223550&single=true&output=csv");
+            } catch (error) {
+                console.log("error loading sheets from urls", error);
+            }
+
+            // Populate statements from the Data Twist statements sheet
+            statementsSheet.forEach(function (row) {
+                // Extract all statement columns (strongly agree, somewhat agree, somewhat disagree, strongly disagree)
+                const stronglyAgree = row["Write a PERSONAL statement you STRONGLY AGREE with. For example, my mother accepts me for who I am."];
+                const somewhatAgree = row["Write a CASUAL statement you SOMEWHAT AGREE with. For example, Training wheels do not train balance so are best skipped when learning to ride a bike."];
+                const somewhatDisagree = row["Write a PLAYFUL statement you SOMEWHAT DISAGREE with. For example, stinkier cheese has more flavor than milder smelling cheese."];
+                const stronglyDisagree = row["Write a THORNY statement you STRONGLY DISAGREE with. For example, Art funding is unnecessary with the influx of NFTs. No inflammatory statements please."];
+
+                // Add statements if they are not empty and don't contain questions
+                if (stronglyAgree && stronglyAgree.trim() !== "" && !stronglyAgree.includes('?')) {
+                    statements.push(stronglyAgree);
+                }
+                if (somewhatAgree && somewhatAgree.trim() !== "" && !somewhatAgree.includes('?')) {
+                    statements.push(somewhatAgree);
+                }
+                if (somewhatDisagree && somewhatDisagree.trim() !== "" && !somewhatDisagree.includes('?')) {
+                    statements.push(somewhatDisagree);
+                }
+                if (stronglyDisagree && stronglyDisagree.trim() !== "" && !stronglyDisagree.includes('?')) {
+                    statements.push(stronglyDisagree);
+                }
+            });
+
+            // Define body parts for games that use them
+            const bodyPartsMap = {
+                "Twister Reimagined": ["right hand", "left hand", "right foot", "left foot"],
+                "Urban Interchange": ["right hand", "left hand", "right foot", "left foot", "right elbow", "left elbow", "ribs", "nose"]
+            };
+
+            // Map game names to local image files
+            const gameImageMap = {
+                "Compass": "img/Compass.jpg",
+                "Twister Reimagined": "img/TwisterReimagined.png",
+                "Urban Interchange": "img/UrbanInterchanges.png",
+                "School Day": "img/SchoolDay.png",
+                "Head, Shoulders, Knees, & Toes": "img/HeadShouldersKneesToes.png",
+                "States of Matter": "img/StatesOfMatterTemp.png"
+            };
+
+            // Process games from CI Games sheet
+            gamesSheet.forEach(function (gameRow) {
+                const gameName = gameRow.game;
+                const orientation = gameRow.orientation;
+                const rules = gameRow.rules;
+                const visualKeyUrl = gameImageMap[gameName] || "img/qr.png";
+                const bodyPartFlag = gameRow["body part"];
+
+                // Determine if this game uses body parts (on/off flag)
+                let bodyParts = [];
+                if (bodyPartFlag === "on" && bodyPartsMap[gameName]) {
+                    bodyParts = bodyPartsMap[gameName];
+                }
+
+                // Create game orientation description
+                let orientationDesc = `<h2>${gameName.toUpperCase()}</h2><br />${orientation}`;
+
+                // Create choreography instructions based on rules
+                let choreographyInstructions = `<h2>CHOREOGRAPHY</h2><br />${rules}`;
+
+                // Add game data to arrays
+                if (gameName) {
+                    setsOfParts.push(bodyParts);
+                    orientations.push(orientationDesc);
+                    orientationImages.push(visualKeyUrl);
+                    orientationImagesAlt.push(gameName);
+                    instructions.push(choreographyInstructions);
+                }
+            });
+
+            /* calling other functions from within this async function ensures all data is loaded first */
+            setupArrays();
+            printGameCards();
+            // grammarOn();
+            // captionsOn();
+        }
+
+        /*Populates 'setsOfParts', 'orientations', 'orientationImages', 'orientationImagesAlt', 'instructions' 
+        NOTE: These arrays are now populated dynamically from Google Sheets in setupFormData(), 
+        so this function now just initializes the first game display */
+        function setupArrays() {
+            // Arrays are now dynamically populated from Google Sheets in setupFormData()
+            // Initialize first game
+            if (setsOfParts.length > 0) {
+                parts = setsOfParts[0];
+            }
+        }
+
+        function printGameCards() {
+
+            /* Print default game cards for orientation, body part, and statement */
+            document.getElementById("orientation img").src = orientationImages[0];
+            document.getElementById("orientation img").alt = orientationImagesAlt[0];
+            document.getElementById("orientation").innerHTML = orientations[0];
+            document.getElementById("instruction").innerHTML = instructions[0];
+
+            parts = setsOfParts[0];
+            updateBodyPartDisplay();
+            document.getElementById("statement").innerHTML = picker("statement");
+
+
+            // When button 2 is pressed, update body part and statement game cards
+            document.getElementById("spin button").addEventListener("click", function (event) {
+                let statement = picker("statement");
+                let part = "";
+                
+                if (parts.length > 0) {
+                    part = picker("part");
+                    speakText(part);
+                }
+                
+                speakText(statement);
+                document.getElementById("body part").innerHTML = part;
+                document.getElementById("statement").innerHTML = statement;
+
+            });
+
+            /* When button 1 is pressed, update orientation game card with image and image alt text.
+            * Also update 'parts' to match the orientation (e.g., Twister only uses hands and feet)*/
+            document.getElementById("orient button").addEventListener("click", function (event) {
+                if (counter < orientations.length) {
+                    document.getElementById("orientation img").src = orientationImages[counter];
+                    document.getElementById("orientation img").alt = orientationImagesAlt[counter];
+                    document.getElementById("orientation").innerHTML = orientations[counter];
+                    document.getElementById("instruction").innerHTML = instructions[counter];
+
+                    pickedParts = [];
+                    parts = setsOfParts[counter];
+                    updateBodyPartDisplay();
+                    document.getElementById("statement").innerHTML = picker("statement");
+
+                    counter++;
+                }
+                if (counter === orientations.length) {
+                    counter = 0;
+                }
+            });
+
+            // For debugging, use 'tab' to select a button then 'return' to press it.
+        }
+
+        /* Helper function to show/hide body part display based on current game */
+        function updateBodyPartDisplay() {
+            const bodyPartEl = document.getElementById("body part");
+            if (parts.length > 0) {
+                bodyPartEl.style.display = "";
+                bodyPartEl.innerHTML = picker("part");
+            } else {
+                bodyPartEl.style.display = "none";
+                bodyPartEl.innerHTML = "";
+            }
+        }
+
+        /* See Web Speech API documentation on MDM Web Docs by Mozilla. 'speakText' reads aloud the body part and statement */
+        function speakText(text) {
+            const speech = new SpeechSynthesisUtterance(text);
+            const voices = speechSynthesis.getVoices();
+
+            speech.lang = "en-US"; // Set language
+            speech.rate = 1; // Speed (1 is normal)
+            speech.pitch = 1; // Pitch (1 is normal)
+            speech.voice = voices.find(voice => voice.name === "Google UK English Female");
+
+            window.speechSynthesis.speak(speech);
+        }
+
+        /* See Web Speech API documentation on MDM Web Docs by Mozilla. 'captionsOn' creates captions by listening to
+        detected speech over computer mic */
+        function captionsOn() {
+            const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            recognition.lang = 'en-US';
+            recognition.continuous = true;
+
+            recognition.onresult = (event) => {
+                let result;
+                for (let i = 0; i < event.results.length; ++i) {
+                    result = event.results[i][0].transcript;
+                    document.getElementById("captions").textContent = result; // print to screen
+                }
+            };
+
+            recognition.start();
+        }
+
+        function grammarOn() {
+            const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            recognition.lang = 'en-US';
+            recognition.continuous = true;
+
+            recognition.onresult = (event) => {
+                let result;
+                for (let i = 0; i < event.results.length; ++i) {
+                    result = event.results[i][0].transcript;
+                    if (result === "game") {
+                        if (counter < orientations.length) {
+                            document.getElementById("orientation img").src = orientationImages[counter];
+                            document.getElementById("orientation img").alt = orientationImagesAlt[counter];
+                            document.getElementById("orientation").innerHTML = orientations[counter];
+                            document.getElementById("instruction").innerHTML = instructions[counter];
+                            counter++;
+                        }
+                        if (counter === orientations.length) {
+                            counter = 0;
+                        }
+                    }
+                    else if (result === "spin") {
+                        let part = picker("part");
+                        let statement = picker("statement");
+
+                        speakText(part);
+                        speakText(statement);
+                        document.getElementById("body part").innerHTML = part;
+                        document.getElementById("statement").innerHTML = statement;
+                    }
+                }
+            };
+
+            recognition.start();
+        }
+
+        /*Randomly pick and return a part or statement depending on 'choice' parameter */
+        function picker(choice) {
+
+            if (choice === "part") {
+                let randomP = d3.randomInt(parts.length);
+                let part = parts[randomP()];
+
+                if (parts.length === pickedParts.length) {
+                    pickedParts = [];
+                }
+
+                while (part === "incomplete" || pickedParts.includes(part)) {
+                    part = parts[randomP()];
+                }
+
+                pickedParts.push(part);
+                return part;
+            }
+
+            if (choice === "statement") {
+                let randomS = d3.randomInt(statements.length);
+                let statement = statements[randomS()];
+
+                if (statements.length === pickedStatements.length) {
+                    pickedStatements = [];
+                }
+
+                while (statement === "incomplete" || pickedStatements.includes(statement)) {
+                    statement = statements[randomS()];
+                }
+
+                pickedStatements.push(statement);
+                return statement;
+            }
+        }
+
+        // Example usage:
+    </script>
+
+    <!-- Brush stroke library — ESM build exposed to window for main.js -->
+    <script type="module">
+      import { getStroke } from './js/perfect-freehand.module.js';
+      window.getStroke = getStroke;
+    </script>
+    <!-- Load my scripts -->
+    <script src="js/main.js"></script>
+</body>
+</html>

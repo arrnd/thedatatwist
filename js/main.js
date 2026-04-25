@@ -35,6 +35,9 @@ const SLOTS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8'];
 // State per slot: { device, rxChar }
 const connections = { p1: null, p2: null, p3: null, p4: null, p5: null, p6: null, p7: null, p8: null };
 
+// Active game — only COMPASS shows the canvas visualization
+let currentGame = 'COMPASS';
+
 // Countdown state
 let countdownInterval = null;
 
@@ -174,8 +177,8 @@ function startSpin() {
       clearInterval(countdownInterval);
       countdownInterval = null;
       updateCountdown(countdownEl, 0, false);
-      // Give 800ms for final BLE responses to arrive, then trigger visualization
-      setTimeout(triggerVisualization, 800);
+      // Give 800ms for final BLE responses to arrive, then trigger visualization (Compass only)
+      if (currentGame === 'COMPASS') setTimeout(triggerVisualization, 800);
     }
   }, 1000);
 }
@@ -257,20 +260,20 @@ function triggerVisualization() {
     if (r && r !== '-' && counts[r] !== undefined) counts[r]++;
   });
 
-  // Find dominant direction (null if tie or all no-answer)
+  // Find all directions tied for the top (could be 1, 2, 3, or 4)
   const maxCount = Math.max(...Object.values(counts));
-  let dominantDir = null;
-  let dominantColor = null;
+  let dominants = [];
   if (maxCount > 0) {
-    dominantDir = Object.keys(counts).find(k => counts[k] === maxCount);
-    dominantColor = DIRECTION_META[dominantDir].color;
+    dominants = Object.keys(counts)
+      .filter(k => counts[k] === maxCount)
+      .map(dir => ({ dir, color: DIRECTION_META[dir].color }));
   }
 
   // Skip color flash — go straight to canvas visualization
-  showVizOverlay(dominantColor, dominantDir);
+  showVizOverlay(dominants);
 }
 
-function showVizOverlay(dominantColor, dominantDir) {
+function showVizOverlay(dominants) {
   const overlay = document.getElementById('viz-overlay');
   overlay.classList.add('viz-overlay--active');
 
@@ -285,7 +288,7 @@ function showVizOverlay(dominantColor, dominantDir) {
   overlay.addEventListener('click', dismiss);
   document.addEventListener('keydown', dismiss);
 
-  renderTraces(dominantColor, dominantDir);
+  renderTraces(dominants);
 }
 
 function dirColor(dir) {
@@ -297,13 +300,13 @@ function dirColor(dir) {
 }
 
 
-function renderTraces(dominantColor, dominantDir) {
+function renderTraces(dominants) {
   const chartEl = document.getElementById('viz-chart');
   if (!chartEl) return;
   chartEl.innerHTML = '';
 
-  const W = chartEl.clientWidth || 740;
-  const H = Math.round(W * 0.57);
+  const W = chartEl.clientWidth  || window.innerWidth;
+  const H = chartEl.clientHeight || window.innerHeight;
   const STEP = 8;
   const TOTAL_MS = 10000;
   const PF_N = 48; // interpolation points per stroke fed to Perfect Freehand
@@ -463,8 +466,8 @@ function renderTraces(dominantColor, dominantDir) {
         if (!outline || outline.length < 2) return;
         ctx.save();
         ctx.globalAlpha = 0.88;
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = '#ffffff';
+        ctx.fillStyle = '#9ca3af';
+        ctx.shadowColor = '#9ca3af';
         ctx.shadowBlur = size * 0.8;
         ctx.beginPath();
         ctx.moveTo(outline[0][0], outline[0][1]);
@@ -509,78 +512,97 @@ function renderTraces(dominantColor, dominantDir) {
     if (elapsed < maxEnd + 300) {
       requestAnimationFrame(animate);
     } else {
-      // Stroke animation done — flood canvas with dominant color from its origin
-      if (dominantColor && dominantDir) startFlood();
+      // Stroke animation done — flood canvas with dominant color(s) from their origins
+      if (dominants && dominants.length > 0) startFlood();
     }
   }
 
-  // Dominant color sweeps in from its directional origin, multiply-blended over strokes
+  // Dominant color(s) sweep in from their directional origins with region-based splits.
   function startFlood() {
     const FLOOD_MS = 10000;
-    const EDGE = 60; // soft gradient leading edge width
-    const snapshot = ctx.getImageData(0, 0, W, H); // freeze final stroke state
+    const snapshot = ctx.getImageData(0, 0, W, H);
     const floodStart = performance.now();
+
+    const isH = d => d === 'E' || d === 'W';
+    const isV = d => d === 'N' || d === 'S';
+
+    function computeRegions() {
+      const dirs  = dominants.map(d => d.dir);
+      const hDirs = dirs.filter(isH); // used for 2-way cross-plane only
+      const vDirs = dirs.filter(isV);
+      const n = dirs.length;
+      const r = {};
+
+      if (n === 1) {
+        r[dirs[0]] = { x: 0, y: 0, w: W, h: H };
+
+      } else if (n === 2) {
+        if (hDirs.length === 2) {
+          // E+W: split at vertical midline
+          r['E'] = { x: 0,       y: 0, w: W * 0.5, h: H };
+          r['W'] = { x: W * 0.5, y: 0, w: W * 0.5, h: H };
+        } else if (vDirs.length === 2) {
+          // N+S: split at horizontal midline
+          r['S'] = { x: 0, y: 0,       w: W, h: H * 0.5 };
+          r['N'] = { x: 0, y: H * 0.5, w: W, h: H * 0.5 };
+        } else {
+          // Cross-plane: H takes its 50% side full height, V gets remaining 50%
+          const hDir = hDirs[0];
+          const vDir = vDirs[0];
+          const vX   = hDir === 'E' ? W * 0.5 : 0;
+          const hX   = hDir === 'E' ? 0 : W * 0.5;
+          r[hDir] = { x: hX, y: 0, w: W * 0.5, h: H };
+          r[vDir] = { x: vX, y: 0, w: W * 0.5, h: H };
+        }
+
+      } else {
+        // 3-way (33% each) or 4-way (25% each): equal vertical strips
+        // E always leftmost, W always rightmost, N/S fill the middle
+        const ordered = [
+          ...dominants.filter(d => d.dir === 'E'),
+          ...dominants.filter(d => d.dir === 'N' || d.dir === 'S'),
+          ...dominants.filter(d => d.dir === 'W'),
+        ];
+        const stripW = W / n;
+        ordered.forEach(({ dir }, i) => {
+          r[dir] = { x: i * stripW, y: 0, w: stripW, h: H };
+        });
+      }
+
+      return r;
+    }
+
+    const regions = computeRegions();
 
     function easeInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4 - 2*t)*t; }
 
-    function animateFlood(now) {
-      const t = easeInOut(Math.min(1, (now - floodStart) / FLOOD_MS));
-
-      // Restore clean stroke frame each tick so multiply never accumulates
-      ctx.putImageData(snapshot, 0, 0);
-
+    function drawSweep(color, dir, region, t) {
       ctx.save();
+
+      // Clip to this color's allocated region
+      ctx.beginPath();
+      ctx.rect(region.x, region.y, region.w, region.h);
+      ctx.clip();
+
       ctx.globalCompositeOperation = 'color';
-      ctx.globalAlpha = t; // gradually reaches full hue tint over 10s
+      ctx.globalAlpha = Math.pow(t, 0.25);
+      ctx.fillStyle = color;
 
-      if (dominantDir === 'N') {
-        // Green — sweeps from bottom upward
-        const filled = H * t;
-        const edgeY = H - filled;
-        const grad = ctx.createLinearGradient(0, edgeY, 0, edgeY + EDGE);
-        grad.addColorStop(0, dominantColor + '00');
-        grad.addColorStop(1, dominantColor);
-        ctx.fillStyle = dominantColor;
-        ctx.fillRect(0, edgeY + EDGE, W, filled);
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, edgeY, W, EDGE);
-
-      } else if (dominantDir === 'S') {
-        // Red — sweeps from top downward
-        const filled = H * t;
-        const grad = ctx.createLinearGradient(0, filled - EDGE, 0, filled);
-        grad.addColorStop(0, dominantColor);
-        grad.addColorStop(1, dominantColor + '00');
-        ctx.fillStyle = dominantColor;
-        ctx.fillRect(0, 0, W, filled - EDGE);
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, filled - EDGE, W, EDGE);
-
-      } else if (dominantDir === 'E') {
-        // Yellow — sweeps from left rightward
-        const filled = W * t;
-        const grad = ctx.createLinearGradient(filled - EDGE, 0, filled, 0);
-        grad.addColorStop(0, dominantColor);
-        grad.addColorStop(1, dominantColor + '00');
-        ctx.fillStyle = dominantColor;
-        ctx.fillRect(0, 0, filled - EDGE, H);
-        ctx.fillStyle = grad;
-        ctx.fillRect(filled - EDGE, 0, EDGE, H);
-
-      } else if (dominantDir === 'W') {
-        // Blue — sweeps from right leftward
-        const filled = W * t;
-        const startX = W - filled;
-        const grad = ctx.createLinearGradient(startX, 0, startX + EDGE, 0);
-        grad.addColorStop(0, dominantColor + '00');
-        grad.addColorStop(1, dominantColor);
-        ctx.fillStyle = dominantColor;
-        ctx.fillRect(startX + EDGE, 0, filled, H);
-        ctx.fillStyle = grad;
-        ctx.fillRect(startX, 0, EDGE, H);
-      }
+      if (dir === 'N') { const f = region.h * t; ctx.fillRect(region.x, region.y + region.h - f, region.w, f); }
+      else if (dir === 'S') { ctx.fillRect(region.x, region.y, region.w, region.h * t); }
+      else if (dir === 'E') { ctx.fillRect(region.x, region.y, region.w * t, region.h); }
+      else if (dir === 'W') { const f = region.w * t; ctx.fillRect(region.x + region.w - f, region.y, f, region.h); }
 
       ctx.restore();
+    }
+
+    function animateFlood(now) {
+      const t = easeInOut(Math.min(1, (now - floodStart) / FLOOD_MS));
+      ctx.putImageData(snapshot, 0, 0);
+      dominants.forEach(({ color, dir }) => {
+        const region = regions[dir];
+        if (region) drawSweep(color, dir, region, t);
+      });
       if (t < 1) requestAnimationFrame(animateFlood);
     }
 
@@ -600,14 +622,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btn) btn.addEventListener('click', () => connectCPB(slot));
   });
 
-  // Hide BLE panel when not on Compass orientation
-  const gameBtn  = document.getElementById('orient button');
-  const blePanel = document.getElementById('ble-panel');
-  if (gameBtn && blePanel) {
+  // Track active game (BLE panel is now on its own slide — no show/hide needed)
+  const gameBtn = document.getElementById('orient button');
+  if (gameBtn) {
     gameBtn.addEventListener('click', () => {
       setTimeout(() => {
-        const heading = document.getElementById('orientation')?.querySelector('h2')?.textContent || '';
-        blePanel.style.display = heading === 'COMPASS' ? '' : 'none';
+        const heading = document.getElementById('game-title')?.textContent?.trim().toUpperCase() || '';
+        currentGame = heading || 'COMPASS';
       }, 0);
     });
   }
